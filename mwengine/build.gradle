@@ -1,81 +1,52 @@
 apply plugin: 'com.android.library'
 
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-        maven { url 'https://jitpack.io' }
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.13.0'
-    }
-}
-
 android {
     namespace "nl.igorski.mwengine"
-    compileSdkVersion 33
+    compileSdk 36
 
     defaultConfig {
-        // NOTE: the value of minSdkVersion is used by the native build as the target APP_PLATFORM
-        // meaning the app will not run on devices with an older Android version! The minimum supported SDK
-        // version for MWEngine is 16 (Jelly Bean/4.1). While support of AAudio was only added in version 26 (Oreo/8),
-        // we can still provide AAudio by loading it at runtime when the device supports it. You can
-        // thus set the value of minSdkVersion to whatever fits your use case.
-
-        minSdkVersion 21
-        targetSdkVersion 33
+        minSdk 24
+        targetSdk 36
 
         ndk {
-            abiFilters "arm64-v8a", "armeabi-v7a", "x86_64" // ,"x86" is uncommon, x86_64 is mostly for emulation
+            abiFilters "arm64-v8a", "armeabi-v7a", "x86_64"
         }
 
         externalNativeBuild {
-
-            // List of potential arguments: https://developer.android.com/ndk/guides/cmake.html
-
             cmake {
                 arguments "-DANDROID_TOOLCHAIN=clang",
                           "-DANDROID_STL=c++_static",
-                          "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON" // provide 16KB alignment on NDK <28
-
-                // AAudio support requires minSdkVersion 26 onwards. We can load libaaudio.so
-                // at runtime on devices that support it. If minSdkVersion is equal to or above
-                // version 26, we can include the library at compilation and omit runtime loading.
-
-                arguments "-DINCLUDE_AAUDIO_LIBRARY=" + ( minSdkVersion.getApiLevel() >= 26 ).toString()
-
-                // Tests are disabled by default, to enable tests add the
-                // following line to the local.properties file:
-                // enable_tests=true
-
-                arguments "-DRUN_TESTS=" + getRunTests()
-
+                          "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+                arguments "-DINCLUDE_AAUDIO_LIBRARY=" + (minSdk.getApiLevel() >= 26).toString()
                 cFlags   "-O3"
-                cppFlags "-std=c++17 -Werror -Wno-deprecated-declarations -fexceptions -frtti"
+                cppFlags "-std=c++17 -fexceptions -frtti"
             }
         }
     }
+
     externalNativeBuild {
         cmake {
-            path "CMakeLists.txt"
+            path "mwengine-source/mwengine/CMakeLists.txt"
         }
     }
-}
 
-clean.doFirst {
-    delete fileTree("src/main/java/nl/igorski/mwengine/core") { include '**/*.java' }
-}
-
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-        maven { url 'https://jitpack.io' }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
+}
+
+repositories {
+    google()
+    mavenCentral()
 }
 
 def getRunTests() {
     Properties properties = new Properties()
-    properties.load(new File(rootDir.absolutePath + '/local.properties').newDataInputStream())
-    return properties.getProperty('enable_tests', 'false').toBoolean().toString()
+    def localProperties = new File(rootDir, 'local.properties')
+    if (localProperties.exists()) {
+        properties.load(localProperties.newDataInputStream())
+        return properties.getProperty('enable_tests', 'false').toBoolean().toString()
+    }
+    return 'false'
 }

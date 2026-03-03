@@ -19,26 +19,21 @@
 # IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #
-cmake_minimum_required(VERSION 3.4.1)
+cmake_minimum_required(VERSION 3.22.1)
 
-# policies for SWIG
+# policies for SWIG (EAS compatible)
 cmake_policy(SET CMP0086 NEW)
 cmake_policy(SET CMP0078 NEW)
-
-# For more information about using CMake with Android Studio, read the
-# documentation: https://d.android.com/studio/projects/add-native-code.html
 
 Project(MWEngine)
 set(target mwengine)
 
 # architecture-specific compiler flags
-
 if (${ANDROID_ABI} MATCHES "x86_64")
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=x86-64 -msse4.2 -mpopcnt -m64")
 endif()
 
 # source folders
-
 set(CPP_SRC  ${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp)
 set(JAVA_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/main/java)
 
@@ -46,7 +41,6 @@ set(JAVA_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/main/java)
 include_directories(${CPP_SRC}/)
 
 # core engine
-
 set(MWENGINE_CORE_SOURCES ${CPP_SRC}/global.cpp
                           ${CPP_SRC}/audioengine.cpp
                           ${CPP_SRC}/audiobuffer.cpp
@@ -92,13 +86,11 @@ set(MWENGINE_CORE_SOURCES ${CPP_SRC}/global.cpp
                           ${CPP_SRC}/utilities/utils.cpp)
 
 # Mikrowave specific sources (drum machine specific, you can also create drum machines using sampledinstrument)
-
 set(MWENGINE_MIKROWAVE_SOURCES ${CPP_SRC}/drumpattern.cpp
                                ${CPP_SRC}/events/drumevent.cpp
                                ${CPP_SRC}/instruments/druminstrument.cpp)
 
 # synthesis (can be omitted if your use case only concerns sample based playback)
-
 set(MWENGINE_SYNTH_SOURCES ${CPP_SRC}/definitions/pitch.cpp
                            ${CPP_SRC}/events/basesynthevent.cpp
                            ${CPP_SRC}/events/synthevent.cpp
@@ -109,7 +101,6 @@ set(MWENGINE_SYNTH_SOURCES ${CPP_SRC}/definitions/pitch.cpp
                            ${CPP_SRC}/generators/synthesizer.cpp)
 
 # effects processors (can be omitted if your use case only concerns raw audio)
-
 set(MWENGINE_PROCESSORS ${CPP_SRC}/processors/basedynamicsprocessor.cpp
                         ${CPP_SRC}/processors/bitcrusher.cpp
                         ${CPP_SRC}/processors/compressor.cpp
@@ -134,92 +125,100 @@ set(MWENGINE_PROCESSORS ${CPP_SRC}/processors/basedynamicsprocessor.cpp
                         ${CPP_SRC}/processors/waveshaper.cpp)
 
 # when using the library solely from C++ you can omit bundling JNI_SOURCES (or SWIG wrapping)
-
 set(JNI_SOURCES ${CPP_SRC}/jni/javabridge.cpp
                 ${CPP_SRC}/jni/javautilities.cpp)
 
 # build the mock driver into the library when unit test execution is enabled
-
 if (${RUN_TESTS} MATCHES "true")
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D=MOCK_ENGINE")
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DMOCK_ENGINE")
     set(MWENGINE_CORE_SOURCES ${MWENGINE_CORE_SOURCES}
                               ${CPP_SRC}/drivers/mock_io.cpp)
 endif()
 
 # include the AAudio library into the MWEngine compilation when configured
-
 if (${INCLUDE_AAUDIO_LIBRARY} MATCHES "true")
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D=INCLUDE_AAUDIO_LIBRARY")
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DINCLUDE_AAUDIO_LIBRARY")
 endif()
 
-add_library(${target} STATIC
+# Build SHARED library for Expo/EAS compatibility (instead of STATIC)
+add_library(${target} SHARED
                      ${MWENGINE_CORE_SOURCES}
                      ${MWENGINE_SYNTH_SOURCES}
                      ${MWENGINE_PROCESSORS}
                      ${MWENGINE_MIKROWAVE_SOURCES}
                      ${JNI_SOURCES})
 
-# link all the NDK libraries used by the project
+# Compiler optimizations for audio processing
+target_compile_options(${target} PRIVATE 
+    -O3 
+    -ffast-math 
+    -funsafe-math-optimizations
+)
 
-target_link_libraries(${target} android atomic log OpenSLES)
+# link all the NDK libraries used by the project
+find_library(log-lib log)
+find_library(android-lib android)
+find_library(atomic-lib atomic)
+find_library(opensles-lib OpenSLES)
+find_library(aaudio-lib aaudio)
+
+target_link_libraries(${target} 
+    ${android-lib} 
+    ${atomic-lib} 
+    ${log-lib} 
+    ${opensles-lib}
+)
 
 # if AAudio library inclusion is configured in the build, link it here
-# (otherwise AAudio will be resolved by loading libaaudio.so at runtime)
-
 if (${INCLUDE_AAUDIO_LIBRARY} MATCHES "true")
-    target_link_libraries(${target} PRIVATE aaudio)
+    target_link_libraries(${target} PRIVATE ${aaudio-lib})
 endif()
 
 #####################################
 ## SWIG JNI to Java class wrapping ##
 #####################################
 
-find_package(SWIG REQUIRED)
-include(${SWIG_USE_FILE})
+# Make SWIG COMPLETELY OPTIONAL for EAS servers
+find_package(SWIG QUIET)
+if(SWIG_FOUND)
+    message(STATUS "SWIG found - generating Java bindings")
+    include(${SWIG_USE_FILE})
 
-set_property(SOURCE ${CPP_SRC}/mwengine.i PROPERTY CPLUSPLUS ON)
+    set_property(SOURCE ${CPP_SRC}/mwengine.i PROPERTY CPLUSPLUS ON)
+    set(CMAKE_SWIG_FLAGS -DNO_RTIO -c++ -lcarrays.i -package nl.igorski.mwengine.core)
+    set(CMAKE_SWIG_OUTDIR ${JAVA_SRC}/nl/igorski/mwengine/core)
 
-set(CMAKE_SWIG_FLAGS -DNO_RTIO -c++ -lcarrays.i -package nl.igorski.mwengine.core)
-set(CMAKE_SWIG_OUTDIR ${JAVA_SRC}/nl/igorski/mwengine/core)
-
-# Export a wrapper file to Java, and link with the created C++ library
-
-swig_add_library(${target}_wrapped LANGUAGE java SOURCES ${CPP_SRC}/mwengine.i)
-swig_link_libraries(${target}_wrapped ${target})
+    # Export a wrapper file to Java, and link with the created C++ library
+    swig_add_library(${target}_wrapped LANGUAGE java SOURCES ${CPP_SRC}/mwengine.i)
+    swig_link_libraries(${target}_wrapped ${target})
+else()
+    message(STATUS "SWIG not found - skipping Java bindings (using direct JNI)")
+endif()
 
 ################
 ## UNIT TESTS ##
 ################
 
 if (${RUN_TESTS} MATCHES "true")
-
-    # only run for a single architecture, assume x86_64 TODO: specify via local.properties?
-
+    # only run for a single architecture, assume x86_64
     if (${ANDROID_ABI} MATCHES "x86_64")
-
         set(GTEST_DIR ${ANDROID_NDK}/sources/third_party/googletest)
 
-        add_library(gtest STATIC ${GTEST_DIR}/src/gtest_main.cc ${GTEST_DIR}/src/gtest-all.cc)
+        add_library(gtest STATIC 
+            ${GTEST_DIR}/src/gtest_main.cc 
+            ${GTEST_DIR}/src/gtest-all.cc
+        )
         target_include_directories(gtest PRIVATE ${GTEST_DIR})
         target_include_directories(gtest PUBLIC ${GTEST_DIR}/include)
 
         add_executable(${target}_unittest ${CPP_SRC}/tests/main.cpp)
         target_link_libraries(${target}_unittest ${target} gtest)
 
-        # Push and execute tests as post-build event
-
-        set(TARGET_TEST_DIR /data/local/tmp/${target}_unittest_${ANDROID_ABI}) # Directory on device to push tests.
-
-        #    find_program(ADB NAMES adb PATHS ${ANDROID_SDK_ROOT}/platform-tools)
-
+        # Push and execute tests as post-build event (disabled for EAS)
+        set(TARGET_TEST_DIR /data/local/tmp/${target}_unittest_${ANDROID_ABI})
         add_custom_command(
             TARGET ${target}_unittest POST_BUILD
-            COMMAND adb shell mkdir -p ${TARGET_TEST_DIR}
-            COMMAND adb push $<TARGET_FILE:${target}> ${TARGET_TEST_DIR}/
-            COMMAND adb push $<TARGET_FILE:${target}_unittest> ${TARGET_TEST_DIR}/
-            COMMAND adb shell \"export LD_LIBRARY_PATH=${TARGET_TEST_DIR}\; ${TARGET_TEST_DIR}/${target}_unittest\"
+            COMMENT "Running unit tests requires device/emulator - skipping for EAS"
         )
-
     endif()
-
 endif()
